@@ -1,0 +1,22 @@
+{
+  "name": "overspeeding-api",
+  "version": "1.0.0",
+  "description": "API for automobile overspeeding detection system",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "helmet": "^6.2.0",
+    "joi": "^17.13.3",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.16.0"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  }
+}
