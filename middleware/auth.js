@@ -8,4 +8,4 @@ function authenticateAdmin(req, res, next) {
   next();
 }
 
-module.exports = { authenticateDevice, authenticateAdmin };
+module.exports = { authenticateAdmin };
