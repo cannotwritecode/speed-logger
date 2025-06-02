@@ -16,9 +16,9 @@ app.use(cors()); // Enable CORS for React frontend
 app.use(express.json()); // Parse JSON request body
 
 // Routes
-app.use("/api/speedEvents", authenticateDevice, speedEventsRoutes);
+app.use("/api/speedEvents", authenticateAdmin, speedEventsRoutes);
 app.use("/api/devices", authenticateAdmin, devicesRoutes);
-app.use("/api/settings", authenticateDevice, settingsRoutes);
+app.use("/api/settings", authenticateAdmin, settingsRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

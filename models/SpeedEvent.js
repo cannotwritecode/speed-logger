@@ -399,6 +399,333 @@ const SpeedEvent = {
       throw error;
     }
   },
+
+  getLiveFeedEvents: async (filters = {}, limit = 50) => {
+    try {
+      let whereConditions = [];
+      let queryParams = [];
+      let paramIndex = 1;
+
+      if (filters.device_id) {
+        whereConditions.push(`device_id = $${paramIndex++}`);
+        queryParams.push(filters.device_id);
+      }
+
+      if (filters.since) {
+        whereConditions.push(`created_at > $${paramIndex++}`);
+        queryParams.push(filters.since);
+      }
+
+      // Only unprocessed events for live feed
+      if (filters.unprocessed_only) {
+        whereConditions.push(`processed = false`);
+      }
+
+      // Only violations for critical alerts
+      if (filters.violations_only) {
+        whereConditions.push(`speed > speed_limit`);
+      }
+
+      const whereClause = whereConditions.length
+        ? `WHERE ${whereConditions.join(" AND ")}`
+        : "";
+
+      queryParams.push(limit);
+
+      const query = `
+        SELECT 
+          id,
+          device_id,
+          vehicle_id,
+          speed,
+          speed_limit,
+          (speed - speed_limit) as speed_excess,
+          image_url,
+          processed,
+          created_at,
+          CASE 
+            WHEN speed > speed_limit THEN true 
+            ELSE false 
+          END as is_violation,
+          CASE 
+            WHEN speed - speed_limit <= 0 THEN 'within_limit'
+            WHEN speed - speed_limit <= 10 THEN 'minor_violation'
+            WHEN speed - speed_limit <= 20 THEN 'moderate_violation'
+            ELSE 'severe_violation'
+          END as violation_severity,
+          -- Calculate time ago for live feed display
+          EXTRACT(EPOCH FROM (NOW() - created_at)) as seconds_ago
+        FROM speed_events 
+        ${whereClause}
+        ORDER BY created_at DESC 
+        LIMIT $${paramIndex}
+      `;
+
+      const result = await db.query(query, queryParams);
+
+      // Format the results for live feed display
+      const formattedEvents = result.rows.map((event) => ({
+        ...event,
+        time_ago: formatTimeAgo(event.seconds_ago),
+        alert_level: getAlertLevel(event.speed_excess),
+      }));
+
+      return formattedEvents;
+    } catch (error) {
+      console.error("Error getting live feed events:", error);
+      throw error;
+    }
+  },
+
+  // Map View: Get events with location data for map display
+  getEventsWithLocations: async (filters = {}) => {
+    try {
+      let whereConditions = [];
+      let queryParams = [];
+      let paramIndex = 1;
+
+      if (filters.device_id) {
+        whereConditions.push(`device_id = $${paramIndex++}`);
+        queryParams.push(filters.device_id);
+      }
+
+      if (filters.date_from) {
+        whereConditions.push(`created_at >= $${paramIndex++}`);
+        queryParams.push(filters.date_from);
+      }
+
+      if (filters.date_to) {
+        whereConditions.push(`created_at <= $${paramIndex++}`);
+        queryParams.push(filters.date_to);
+      }
+
+      if (filters.violations_only) {
+        whereConditions.push(`speed > speed_limit`);
+      }
+
+      // Only events with location data
+      whereConditions.push(`latitude IS NOT NULL AND longitude IS NOT NULL`);
+
+      const whereClause = whereConditions.length
+        ? `WHERE ${whereConditions.join(" AND ")}`
+        : "";
+
+      const query = `
+        SELECT 
+          id,
+          device_id,
+          vehicle_id,
+          speed,
+          speed_limit,
+          (speed - speed_limit) as speed_excess,
+          latitude,
+          longitude,
+          location_address,
+          image_url,
+          processed,
+          created_at,
+          CASE 
+            WHEN speed > speed_limit THEN true 
+            ELSE false 
+          END as is_violation,
+          CASE 
+            WHEN speed - speed_limit <= 0 THEN 'green'
+            WHEN speed - speed_limit <= 10 THEN 'yellow'
+            WHEN speed - speed_limit <= 20 THEN 'orange'
+            ELSE 'red'
+          END as marker_color
+        FROM speed_events 
+        ${whereClause}
+        ORDER BY created_at DESC
+        LIMIT 1000
+      `;
+
+      const result = await db.query(query, queryParams);
+
+      // Group events by location for better map display
+      const locationGroups = {};
+
+      result.rows.forEach((event) => {
+        const locationKey = `${event.latitude},${event.longitude}`;
+
+        if (!locationGroups[locationKey]) {
+          locationGroups[locationKey] = {
+            latitude: event.latitude,
+            longitude: event.longitude,
+            location_address: event.location_address,
+            events: [],
+            total_events: 0,
+            violations: 0,
+            max_speed: 0,
+            latest_event: event.created_at,
+          };
+        }
+
+        locationGroups[locationKey].events.push(event);
+        locationGroups[locationKey].total_events++;
+        if (event.is_violation) locationGroups[locationKey].violations++;
+        if (event.speed > locationGroups[locationKey].max_speed) {
+          locationGroups[locationKey].max_speed = event.speed;
+        }
+        if (event.created_at > locationGroups[locationKey].latest_event) {
+          locationGroups[locationKey].latest_event = event.created_at;
+        }
+      });
+
+      return {
+        individual_events: result.rows,
+        location_clusters: Object.values(locationGroups),
+      };
+    } catch (error) {
+      console.error("Error getting events with locations:", error);
+      throw error;
+    }
+  },
+
+  // Photo Gallery: Get events with images for gallery display
+  getEventsWithImages: async (
+    filters = {},
+    pagination = { page: 1, limit: 24 }
+  ) => {
+    try {
+      let whereConditions = [];
+      let queryParams = [];
+      let paramIndex = 1;
+
+      // Only events with images
+      whereConditions.push(`image_url IS NOT NULL AND image_url != ''`);
+
+      if (filters.device_id) {
+        whereConditions.push(`device_id = $${paramIndex++}`);
+        queryParams.push(filters.device_id);
+      }
+
+      if (filters.date_from) {
+        whereConditions.push(`created_at >= $${paramIndex++}`);
+        queryParams.push(filters.date_from);
+      }
+
+      if (filters.date_to) {
+        whereConditions.push(`created_at <= $${paramIndex++}`);
+        queryParams.push(filters.date_to);
+      }
+
+      if (filters.violations_only) {
+        whereConditions.push(`speed > speed_limit`);
+      }
+
+      if (filters.processed !== undefined) {
+        whereConditions.push(`processed = $${paramIndex++}`);
+        queryParams.push(filters.processed);
+      }
+
+      const whereClause = `WHERE ${whereConditions.join(" AND ")}`;
+
+      const limit = pagination.limit;
+      const offset = (pagination.page - 1) * limit;
+      const filterParamCount = queryParams.length;
+
+      queryParams.push(limit, offset);
+
+      const query = `
+        SELECT 
+          id,
+          device_id,
+          vehicle_id,
+          speed,
+          speed_limit,
+          (speed - speed_limit) as speed_excess,
+          image_url,
+          latitude,
+          longitude,
+          location_address,
+          processed,
+          created_at,
+          CASE 
+            WHEN speed > speed_limit THEN true 
+            ELSE false 
+          END as is_violation,
+          CASE 
+            WHEN speed - speed_limit <= 0 THEN 'within_limit'
+            WHEN speed - speed_limit <= 10 THEN 'minor_violation'
+            WHEN speed - speed_limit <= 20 THEN 'moderate_violation'
+            ELSE 'severe_violation'
+          END as violation_category
+        FROM speed_events 
+        ${whereClause}
+        ORDER BY created_at DESC
+        LIMIT $${paramIndex++} OFFSET $${paramIndex++}
+      `;
+
+      const { rows } = await db.query(query, queryParams);
+
+      // Count query for pagination
+      const countQuery = `SELECT COUNT(*) FROM speed_events ${whereClause}`;
+      const countResult = await db.query(
+        countQuery,
+        queryParams.slice(0, filterParamCount)
+      );
+      const total = parseInt(countResult.rows[0].count, 10);
+      const totalPages = Math.ceil(total / limit);
+
+      // Get image statistics
+      const statsQuery = `
+        SELECT 
+          COUNT(*) as total_images,
+          COUNT(CASE WHEN speed > speed_limit THEN 1 END) as violation_images,
+          COUNT(CASE WHEN processed = false THEN 1 END) as unprocessed_images
+        FROM speed_events 
+        ${whereClause}
+      `;
+      const statsResult = await db.query(
+        statsQuery,
+        queryParams.slice(0, filterParamCount)
+      );
+
+      return {
+        images: rows.map((row) => ({
+          ...row,
+          thumbnail_url: generateThumbnailUrl(row.image_url),
+          full_size_url: row.image_url,
+        })),
+        pagination: {
+          total,
+          page: pagination.page,
+          totalPages,
+          limit,
+        },
+        stats: {
+          total_images: parseInt(statsResult.rows[0].total_images),
+          violation_images: parseInt(statsResult.rows[0].violation_images),
+          unprocessed_images: parseInt(statsResult.rows[0].unprocessed_images),
+        },
+      };
+    } catch (error) {
+      console.error("Error getting events with images:", error);
+      throw error;
+    }
+  },
 };
+// Helper functions
+function formatTimeAgo(seconds) {
+  if (seconds < 60) return `${Math.floor(seconds)}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+function getAlertLevel(speedExcess) {
+  if (speedExcess <= 0) return "info";
+  if (speedExcess <= 10) return "warning";
+  if (speedExcess <= 20) return "danger";
+  return "critical";
+}
+
+function generateThumbnailUrl(imageUrl) {
+  // Implement your thumbnail generation logic here
+  // This could be a separate service or URL transformation
+  if (!imageUrl) return null;
+  return imageUrl.replace(/\.(jpg|jpeg|png)$/i, "_thumb.$1");
+}
 
 module.exports = SpeedEvent;
