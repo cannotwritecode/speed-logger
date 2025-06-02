@@ -6,7 +6,6 @@ const speedEventsRoutes = require("./routes/speedEvents");
 const devicesRoutes = require("./routes/devices");
 const settingsRoutes = require("./routes/settings");
 const { authenticateAdmin } = require("./middleware/auth");
-const { authenticateDevice } = require("./middleware/auth");
 
 const app = express();
 
