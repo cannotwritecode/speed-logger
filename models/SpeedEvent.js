@@ -1,4 +1,4 @@
-const jwt = require("jsonwebtoken");
+// models/SpeedEvent.js - Enhanced version with additional methods
 const db = require("../db/config");
 
 const SpeedEvent = {
@@ -40,13 +40,24 @@ const SpeedEvent = {
     }
 
     if (filters.date_from) {
-      conditions.push(`timestamp >= $${idx++}`);
+      conditions.push(`created_at >= $${idx++}`);
       values.push(filters.date_from);
     }
 
     if (filters.date_to) {
-      conditions.push(`timestamp <= $${idx++}`);
+      conditions.push(`created_at <= $${idx++}`);
       values.push(filters.date_to);
+    }
+
+    // Add processed filter
+    if (filters.processed !== undefined) {
+      conditions.push(`processed = $${idx++}`);
+      values.push(filters.processed);
+    }
+
+    // Add speeding violations filter
+    if (filters.violations_only) {
+      conditions.push(`speed > speed_limit`);
     }
 
     const whereClause =
@@ -62,9 +73,15 @@ const SpeedEvent = {
     values.push(limit, offset);
 
     const query = `
-      SELECT * FROM speed_events
+      SELECT *, 
+        (speed - speed_limit) as speed_excess,
+        CASE 
+          WHEN speed > speed_limit THEN true 
+          ELSE false 
+        END as is_violation
+      FROM speed_events
       ${whereClause}
-      ORDER BY timestamp DESC
+      ORDER BY created_at DESC
       LIMIT $${idx++} OFFSET $${idx++};
     `;
 
@@ -92,7 +109,16 @@ const SpeedEvent = {
 
   // Get a speed event by ID
   getById: async (id) => {
-    const query = `SELECT * FROM speed_events WHERE id = $1;`;
+    const query = `
+      SELECT *, 
+        (speed - speed_limit) as speed_excess,
+        CASE 
+          WHEN speed > speed_limit THEN true 
+          ELSE false 
+        END as is_violation
+      FROM speed_events 
+      WHERE id = $1;
+    `;
     const { rows } = await db.query(query, [id]);
     return rows[0];
   },
@@ -109,8 +135,56 @@ const SpeedEvent = {
     return rows[0];
   },
 
-  // Add these methods to your SpeedEvent model
+  // NEW: Get speed distribution by hour/day - This was your original request
+  getSpeedDistribution: async (filters, interval = "hour") => {
+    try {
+      let whereConditions = [];
+      let queryParams = [];
+      let paramIndex = 1;
 
+      if (filters.device_id) {
+        whereConditions.push(`device_id = $${paramIndex++}`);
+        queryParams.push(filters.device_id);
+      }
+
+      if (filters.date_from) {
+        whereConditions.push(`created_at >= $${paramIndex++}`);
+        queryParams.push(filters.date_from);
+      }
+
+      if (filters.date_to) {
+        whereConditions.push(`created_at <= $${paramIndex++}`);
+        queryParams.push(filters.date_to);
+      }
+
+      const whereClause = whereConditions.length
+        ? `WHERE ${whereConditions.join(" AND ")}`
+        : "";
+
+      const truncateFunction = interval === "day" ? "day" : "hour";
+
+      const query = `
+        SELECT 
+          DATE_TRUNC('${truncateFunction}', created_at) as time_period, 
+          COUNT(*) as count,
+          AVG(speed) as avg_speed,
+          MAX(speed) as max_speed,
+          COUNT(CASE WHEN speed > speed_limit THEN 1 END) as violations
+        FROM speed_events
+        ${whereClause}
+        GROUP BY time_period 
+        ORDER BY time_period;
+      `;
+
+      const { rows } = await db.query(query, queryParams);
+      return rows;
+    } catch (error) {
+      console.error("Error getting speed distribution:", error);
+      throw error;
+    }
+  },
+
+  // Enhanced stats method
   getStats: async (filters = {}) => {
     try {
       let whereConditions = [];
@@ -145,7 +219,9 @@ const SpeedEvent = {
           MAX(speed) as max_speed,
           MIN(speed) as min_speed,
           AVG(speed_limit) as avg_speed_limit,
-          AVG(speed - speed_limit) as avg_speed_excess
+          AVG(speed - speed_limit) as avg_speed_excess,
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY speed) as median_speed,
+          PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY speed) as p95_speed
         FROM speed_events 
         ${whereClause}
       `;
@@ -158,17 +234,26 @@ const SpeedEvent = {
             WHEN speed - speed_limit <= 20 THEN 'moderate_violation'
             ELSE 'severe_violation'
           END as violation_category,
-          COUNT(*) as count
+          COUNT(*) as count,
+          ROUND(AVG(speed - speed_limit), 2) as avg_excess
         FROM speed_events 
         ${whereClause}
         GROUP BY violation_category
+        ORDER BY 
+          CASE violation_category 
+            WHEN 'within_limit' THEN 1
+            WHEN 'minor_violation' THEN 2
+            WHEN 'moderate_violation' THEN 3
+            WHEN 'severe_violation' THEN 4
+          END
       `;
 
       const trendQuery = `
         SELECT 
           DATE(created_at) as date,
           COUNT(*) as events_count,
-          AVG(speed) as avg_speed
+          AVG(speed) as avg_speed,
+          COUNT(CASE WHEN speed > speed_limit THEN 1 END) as violations_count
         FROM speed_events 
         ${whereClause ? whereClause + " AND" : "WHERE"} 
           created_at >= NOW() - INTERVAL '7 days'
@@ -182,7 +267,8 @@ const SpeedEvent = {
           COUNT(*) as event_count,
           AVG(speed) as avg_speed,
           MAX(speed) as max_speed,
-          COUNT(CASE WHEN speed > speed_limit THEN 1 END) as violations
+          COUNT(CASE WHEN speed > speed_limit THEN 1 END) as violations,
+          ROUND((COUNT(CASE WHEN speed > speed_limit THEN 1 END)::float / COUNT(*) * 100), 2) as violation_rate
         FROM speed_events 
         ${whereClause}
         GROUP BY device_id
@@ -206,6 +292,8 @@ const SpeedEvent = {
         avg_speed: parseFloat(stats.avg_speed) || 0,
         max_speed: parseFloat(stats.max_speed) || 0,
         min_speed: parseFloat(stats.min_speed) || 0,
+        median_speed: parseFloat(stats.median_speed) || 0,
+        p95_speed: parseFloat(stats.p95_speed) || 0,
         avg_speed_limit: parseFloat(stats.avg_speed_limit) || 0,
         avg_speed_excess: parseFloat(stats.avg_speed_excess) || 0,
         violation_rate:
@@ -228,6 +316,7 @@ const SpeedEvent = {
     }
   },
 
+  // Enhanced recent events
   getRecent: async (filters = {}, limit = 10) => {
     try {
       let whereConditions = [];
@@ -237,6 +326,10 @@ const SpeedEvent = {
       if (filters.device_id) {
         whereConditions.push(`device_id = $${paramIndex++}`);
         queryParams.push(filters.device_id);
+      }
+
+      if (filters.violations_only) {
+        whereConditions.push(`speed > speed_limit`);
       }
 
       const whereClause = whereConditions.length
@@ -255,7 +348,11 @@ const SpeedEvent = {
           (speed - speed_limit) as speed_excess,
           image_url,
           processed,
-          created_at
+          created_at,
+          CASE 
+            WHEN speed > speed_limit THEN true 
+            ELSE false 
+          END as is_violation
         FROM speed_events 
         ${whereClause}
         ORDER BY created_at DESC 
@@ -266,6 +363,39 @@ const SpeedEvent = {
       return result.rows;
     } catch (error) {
       console.error("Error getting recent speed events:", error);
+      throw error;
+    }
+  },
+
+  // NEW: Bulk operations
+  bulkMarkAsProcessed: async (ids) => {
+    try {
+      const query = `
+        UPDATE speed_events
+        SET processed = true
+        WHERE id = ANY($1)
+        RETURNING id;
+      `;
+      const { rows } = await db.query(query, [ids]);
+      return rows.map((row) => row.id);
+    } catch (error) {
+      console.error("Error bulk marking events as processed:", error);
+      throw error;
+    }
+  },
+
+  // NEW: Delete old events (for data retention)
+  deleteOldEvents: async (daysOld = 90) => {
+    try {
+      const query = `
+        DELETE FROM speed_events
+        WHERE created_at < NOW() - INTERVAL '${daysOld} days'
+        RETURNING COUNT(*);
+      `;
+      const { rows } = await db.query(query);
+      return rows[0].count;
+    } catch (error) {
+      console.error("Error deleting old events:", error);
       throw error;
     }
   },

@@ -1,31 +1,41 @@
+// routes/speedEvents.js - Enhanced version with additional endpoints
 const express = require("express");
 const router = express.Router();
 const SpeedEvent = require("../models/SpeedEvent");
 const Joi = require("joi");
 
-// Validation schema for speed events
+// Validation schemas
 const speedEventSchema = Joi.object({
   vehicle_id: Joi.string().max(50),
-  speed: Joi.number().required(),
-  speed_limit: Joi.number().required(),
+  speed: Joi.number().min(0).required(),
+  speed_limit: Joi.number().min(0).required(),
   image_url: Joi.string().uri().max(255).allow(null, ""),
+});
+
+const filtersSchema = Joi.object({
+  device_id: Joi.string().max(50),
+  min_speed: Joi.number().min(0),
+  date_from: Joi.date().iso(),
+  date_to: Joi.date().iso().min(Joi.ref("date_from")),
+  processed: Joi.boolean(),
+  violations_only: Joi.boolean(),
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
 });
 
 // POST - Create a new speed event (from Raspberry Pi)
 router.post("/", async (req, res) => {
   try {
-    // Validate request body
     const { error, value } = speedEventSchema.validate(req.body);
     if (error) {
-      return res
-        .status(400)
-        .json({ success: false, message: error.details[0].message });
+      return res.status(400).json({
+        success: false,
+        message: error.details[0].message,
+      });
     }
 
-    // Add device_id from authenticated device
-    value.device_id = req.device.id;
+    value.device_id = req.device?.id || req.body.device_id;
 
-    // Create speed event
     const speedEvent = await SpeedEvent.create(value);
 
     res.status(201).json({
@@ -35,38 +45,34 @@ router.post("/", async (req, res) => {
     });
   } catch (error) {
     console.error("Error creating speed event:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to record speed event" });
+    res.status(500).json({
+      success: false,
+      message: "Failed to record speed event",
+    });
   }
 });
 
-// GET - Retrieve all speed events with filtering and pagination (for frontend)
+// GET - Retrieve all speed events with filtering and pagination
 router.get("/", async (req, res) => {
   try {
-    // Parse query parameters
-    const filters = {
-      device_id: req.query.device_id,
-      min_speed: req.query.min_speed ? parseFloat(req.query.min_speed) : null,
-      date_from: req.query.date_from,
-      date_to: req.query.date_to,
-    };
+    const { error, value } = filtersSchema.validate(req.query);
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.details[0].message,
+      });
+    }
 
-    // Remove null/undefined values
+    const { page, limit, ...filters } = value;
+
+    // Remove undefined values
     Object.keys(filters).forEach((key) => {
-      if (filters[key] === null || filters[key] === undefined) {
+      if (filters[key] === undefined) {
         delete filters[key];
       }
     });
 
-    // Parse pagination
-    const pagination = {
-      page: parseInt(req.query.page) || 1,
-      limit: parseInt(req.query.limit) || 20,
-    };
-
-    // Get speed events
-    const result = await SpeedEvent.getAll(filters, pagination);
+    const result = await SpeedEvent.getAll(filters, { page, limit });
 
     res.json({
       success: true,
@@ -75,77 +81,66 @@ router.get("/", async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching speed events:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to fetch speed events" });
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch speed events",
+    });
   }
 });
 
-// GET - Retrieve a specific speed event by ID
-router.get("/:id", async (req, res) => {
+// GET - NEW: Speed distribution endpoint (your original request)
+router.get("/distribution", async (req, res) => {
   try {
-    const speedEvent = await SpeedEvent.getById(req.params.id);
+    const { device_id, date_from, date_to, interval = "hour" } = req.query;
 
-    if (!speedEvent) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Speed event not found" });
+    if (!device_id || !date_from || !date_to) {
+      return res.status(400).json({
+        success: false,
+        message: "device_id, date_from, and date_to are required",
+      });
     }
+
+    const filters = { device_id, date_from, date_to };
+    const distribution = await SpeedEvent.getSpeedDistribution(
+      filters,
+      interval
+    );
 
     res.json({
       success: true,
-      data: speedEvent,
+      data: distribution,
+      meta: {
+        device_id,
+        date_from,
+        date_to,
+        interval,
+        total_periods: distribution.length,
+      },
     });
   } catch (error) {
-    console.error("Error fetching speed event:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to fetch speed event" });
+    console.error("Error fetching speed distribution:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching speed distribution",
+    });
   }
 });
 
-// PUT - Mark a speed event as processed
-router.put("/:id/process", async (req, res) => {
-  try {
-    const speedEvent = await SpeedEvent.markAsProcessed(req.params.id);
-
-    if (!speedEvent) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Speed event not found" });
-    }
-
-    res.json({
-      success: true,
-      message: "Speed event marked as processed",
-      data: speedEvent,
-    });
-  } catch (error) {
-    console.error("Error updating speed event:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to update speed event" });
-  }
-});
-
-// GET - Retrieve speed events statistics
+// GET - Statistics endpoint (existing but enhanced)
 router.get("/stats", async (req, res) => {
   try {
-    // Parse query parameters for filtering
     const filters = {
       device_id: req.query.device_id,
       date_from: req.query.date_from,
       date_to: req.query.date_to,
     };
 
-    // Remove null/undefined values
     Object.keys(filters).forEach((key) => {
       if (filters[key] === null || filters[key] === undefined) {
         delete filters[key];
       }
     });
 
-    // Get statistics
     const stats = await SpeedEvent.getStats(filters);
 
     res.json({
@@ -154,23 +149,23 @@ router.get("/stats", async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching speed event stats:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to fetch speed event statistics",
-      });
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch speed event statistics",
+    });
   }
 });
 
-// GET - Retrieve recent speed events for dashboard
+// GET - Recent events endpoint (existing but enhanced)
 router.get("/recent", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
     const device_id = req.query.device_id;
+    const violations_only = req.query.violations_only === "true";
 
     const filters = {};
     if (device_id) filters.device_id = device_id;
+    if (violations_only) filters.violations_only = true;
 
     const result = await SpeedEvent.getRecent(filters, limit);
 
@@ -180,9 +175,89 @@ router.get("/recent", async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching recent speed events:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to fetch recent speed events" });
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch recent speed events",
+    });
+  }
+});
+
+// GET - Retrieve a specific speed event by ID
+router.get("/:id", async (req, res) => {
+  try {
+    const speedEvent = await SpeedEvent.getById(req.params.id);
+
+    if (!speedEvent) {
+      return res.status(404).json({
+        success: false,
+        message: "Speed event not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: speedEvent,
+    });
+  } catch (error) {
+    console.error("Error fetching speed event:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch speed event",
+    });
+  }
+});
+
+// PUT - Mark a speed event as processed
+router.put("/:id/process", async (req, res) => {
+  try {
+    const speedEvent = await SpeedEvent.markAsProcessed(req.params.id);
+
+    if (!speedEvent) {
+      return res.status(404).json({
+        success: false,
+        message: "Speed event not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Speed event marked as processed",
+      data: speedEvent,
+    });
+  } catch (error) {
+    console.error("Error updating speed event:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update speed event",
+    });
+  }
+});
+
+// PUT - NEW: Bulk mark as processed
+router.put("/bulk/process", async (req, res) => {
+  try {
+    const { ids } = req.body;
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "ids array is required and cannot be empty",
+      });
+    }
+
+    const processedIds = await SpeedEvent.bulkMarkAsProcessed(ids);
+
+    res.json({
+      success: true,
+      message: `${processedIds.length} speed events marked as processed`,
+      data: { processed_ids: processedIds },
+    });
+  } catch (error) {
+    console.error("Error bulk updating speed events:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to bulk update speed events",
+    });
   }
 });
 
