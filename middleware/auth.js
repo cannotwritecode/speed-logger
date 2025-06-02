@@ -1,3 +1,5 @@
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
+
 function authenticateAdmin(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   if (apiKey !== ADMIN_API_KEY) {
@@ -6,4 +8,4 @@ function authenticateAdmin(req, res, next) {
   next();
 }
 
-module.exports = { authenticateAdmin };
+module.exports = { authenticateDevice, authenticateAdmin };
