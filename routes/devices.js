@@ -137,31 +137,4 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-// POST - Regenerate API key
-router.post("/:id/regenerate-key", async (req, res) => {
-  try {
-    const result = await Device.regenerateApiKey(req.params.id);
-
-    if (!result) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Device not found" });
-    }
-
-    res.json({
-      success: true,
-      message: "API key regenerated successfully",
-      data: {
-        device_id: result.device_id,
-        api_key: result.api_key,
-      },
-    });
-  } catch (error) {
-    console.error("Error regenerating API key:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to regenerate API key" });
-  }
-});
-
 module.exports = router;
