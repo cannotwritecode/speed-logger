@@ -128,4 +128,62 @@ router.put("/:id/process", async (req, res) => {
   }
 });
 
+// GET - Retrieve speed events statistics
+router.get("/stats", async (req, res) => {
+  try {
+    // Parse query parameters for filtering
+    const filters = {
+      device_id: req.query.device_id,
+      date_from: req.query.date_from,
+      date_to: req.query.date_to,
+    };
+
+    // Remove null/undefined values
+    Object.keys(filters).forEach((key) => {
+      if (filters[key] === null || filters[key] === undefined) {
+        delete filters[key];
+      }
+    });
+
+    // Get statistics
+    const stats = await SpeedEvent.getStats(filters);
+
+    res.json({
+      success: true,
+      data: stats,
+    });
+  } catch (error) {
+    console.error("Error fetching speed event stats:", error);
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Failed to fetch speed event statistics",
+      });
+  }
+});
+
+// GET - Retrieve recent speed events for dashboard
+router.get("/recent", async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    const device_id = req.query.device_id;
+
+    const filters = {};
+    if (device_id) filters.device_id = device_id;
+
+    const result = await SpeedEvent.getRecent(filters, limit);
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error fetching recent speed events:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch recent speed events" });
+  }
+});
+
 module.exports = router;
