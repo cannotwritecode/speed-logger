@@ -1,7 +1,11 @@
--- Create devices table
-CREATE TABLE IF NOT EXISTS devices (
-  id SERIAL PRIMARY KEY,
-  device_id VARCHAR(50) UNIQUE NOT NULL,
+-- Step 1: Drop tables in the correct order (children first)
+DROP TABLE IF EXISTS speed_events;
+DROP TABLE IF EXISTS settings;
+DROP TABLE IF EXISTS devices;
+
+-- Step 2: Create devices table
+CREATE TABLE devices (
+  device_id VARCHAR(50) PRIMARY KEY,
   name VARCHAR(100) NOT NULL,
   api_key VARCHAR(100) UNIQUE NOT NULL,
   location VARCHAR(255),
@@ -10,24 +14,24 @@ CREATE TABLE IF NOT EXISTS devices (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create speed_events table
-CREATE TABLE IF NOT EXISTS speed_events (
+-- Step 3: Create speed_events table referencing devices.device_id
+CREATE TABLE speed_events (
   id SERIAL PRIMARY KEY,
-  device_id INTEGER REFERENCES devices(id) NOT NULL,
-  vehicle_id VARCHAR(50),  -- License plate or other identifier
-  speed NUMERIC(5,2) NOT NULL,  -- Speed in km/h or mph
-  speed_limit NUMERIC(5,2) NOT NULL,
+  device_id VARCHAR(50) REFERENCES devices(device_id),
+  vehicle_id VARCHAR(50),
+  speed NUMERIC(10, 2) NOT NULL,
+  speed_limit NUMERIC(10, 2) NOT NULL,
   location_lat NUMERIC(10,6),
   location_lng NUMERIC(10,6),
-  image_url VARCHAR(255),  -- Optional, if camera captures images
-  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  image_url VARCHAR(255),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   processed BOOLEAN DEFAULT FALSE
 );
 
--- Create settings table
-CREATE TABLE IF NOT EXISTS settings (
+-- Step 4: Create settings table referencing devices.device_id
+CREATE TABLE settings (
   id SERIAL PRIMARY KEY,
-  device_id INTEGER REFERENCES devices(id),
+  device_id VARCHAR(50) REFERENCES devices(device_id),
   key VARCHAR(50) NOT NULL,
   value TEXT NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -35,9 +39,12 @@ CREATE TABLE IF NOT EXISTS settings (
   UNIQUE(device_id, key)
 );
 
--- Insert default settings
-INSERT INTO settings (key, value) 
+INSERT INTO devices (device_id, name, api_key)
+VALUES ('global', 'Global Config', 'global-api-key');
+
+-- Then insert default settings for it
+INSERT INTO settings (device_id, key, value)
 VALUES 
-  ('default_speed_limit', '50'),
-  ('alert_threshold', '10'),
-  ('retention_days', '90');
+  ('global', 'default_speed_limit', '50'),
+  ('global', 'alert_threshold', '10'),
+  ('global', 'retention_days', '90');

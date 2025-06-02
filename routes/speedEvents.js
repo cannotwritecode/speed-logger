@@ -6,6 +6,7 @@ const Joi = require("joi");
 
 // Validation schemas
 const speedEventSchema = Joi.object({
+  device_id: Joi.string().max(50),
   vehicle_id: Joi.string().max(50),
   speed: Joi.number().min(0).required(),
   speed_limit: Joi.number().min(0).required(),

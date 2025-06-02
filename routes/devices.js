@@ -110,10 +110,14 @@ router.put("/:id", async (req, res) => {
     }
 
     // Update device
-    const deviceExist = Device.getById(req.params.id);
+    const deviceExist = await Device.getById(req.params.id);
     if (!deviceExist) {
-      console.error("Device you are trying to update does not exist");
-      return;
+      return res
+        .status(404)
+        .json({
+          success: false,
+          message: "Device you are trying to update does not exist",
+        });
     }
 
     const device = await Device.update(req.params.id, value);
